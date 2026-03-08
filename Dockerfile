@@ -60,7 +60,38 @@ COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
 # Create directories for model cache and training data
-RUN mkdir -p /app/models /app/data/games /app/data/training /app/logs
+RUN mkdir -p /app/models /app/data/games /app/data/training /app/logs \
+    /app/models/Qwen_Qwen2.5-0.5B-Instruct \
+    /app/models/meta-llama_Llama-3.2-1B-Instruct
+
+# ── Download models at build time ────────────────────────────────────────────
+# Qwen2.5-0.5B — no token required
+RUN pip install --no-cache-dir huggingface_hub && \
+    python3 -c " \
+from huggingface_hub import snapshot_download; \
+snapshot_download( \
+    repo_id='Qwen/Qwen2.5-0.5B-Instruct', \
+    local_dir='/app/models/Qwen_Qwen2.5-0.5B-Instruct', \
+    local_dir_use_symlinks=False, \
+    ignore_patterns=['*.msgpack','*.h5','flax_model*','tf_model*'] \
+)"
+
+# Llama-3.2-1B — requires HF token (pass as build arg: --build-arg HF_TOKEN=hf_...)
+ARG HF_TOKEN=""
+RUN if [ -n "$HF_TOKEN" ]; then \
+    python3 -c " \
+from huggingface_hub import snapshot_download; \
+snapshot_download( \
+    repo_id='meta-llama/Llama-3.2-1B-Instruct', \
+    local_dir='/app/models/meta-llama_Llama-3.2-1B-Instruct', \
+    local_dir_use_symlinks=False, \
+    token='${HF_TOKEN}', \
+    ignore_patterns=['*.msgpack','*.h5','flax_model*','tf_model*'] \
+)"; \
+fi
+
+ENV WHITE_MODEL=/app/models/Qwen_Qwen2.5-0.5B-Instruct
+ENV BLACK_MODEL=/app/models/meta-llama_Llama-3.2-1B-Instruct
 
 # Expose the application port
 EXPOSE 8000
