@@ -1,0 +1,313 @@
+"""
+ChessEcon Backend — FastAPI Application
+Serves the chess game API, WebSocket event stream, and the built React frontend.
+"""
+from __future__ import annotations
+import os
+import asyncio
+import json
+import logging
+from pathlib import Path
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
+
+from backend.api.game_router import router as game_router
+from backend.api.training_router import router as training_router
+from backend.api.websocket import ws_manager
+from backend.agents.qwen_agent import QwenAgent
+from backend.agents.grpo_trainer import GRPOTrainer
+from backend.chess_lib.chess_engine import ChessEngine
+from backend.settings import settings
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "info").upper(),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Static frontend path ──────────────────────────────────────────────────────
+FRONTEND_DIST = Path(__file__).parent / "static"
+
+# ── Live game snapshot (sent to late-joining clients) ────────────────────────
+# Updated by game_loop; read by websocket_endpoint on new connections.
+game_snapshot: dict = {}
+
+# ── Game loop (runs as a background task) ─────────────────────────────────────
+async def game_loop():
+    white = QwenAgent()
+    black = QwenAgent()
+    from backend.agents.qwen_agent import _load_model
+    tokenizer, model = _load_model()
+    trainer = GRPOTrainer(model, tokenizer)
+    game_num = 0
+    # Wallets persist across games — agents earn/lose money each game
+    wallet_white = settings.starting_wallet
+    wallet_black = settings.starting_wallet
+
+    while True:
+        engine = ChessEngine()
+        move_history: list[str] = []
+        game_num += 1
+
+        # Deduct entry fees at the start of each game
+        wallet_white -= settings.entry_fee
+        wallet_black -= settings.entry_fee
+
+        # Update snapshot so late-joining clients can sync
+        game_snapshot.update({
+            "type": "game_start",
+            "game_num": game_num,
+            "wallet_white": wallet_white,
+            "wallet_black": wallet_black,
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "move_number": 0,
+            "grpo_step": 0,
+            "games_completed": game_num - 1,
+        })
+
+        await ws_manager.broadcast_raw({
+            "type": "game_start",
+            "data": {
+                "game": game_num,
+                "game_id": game_num,
+                "wallet_white": wallet_white,
+                "wallet_black": wallet_black,
+            },
+        })
+
+        trainer.start_game("white")
+
+        while not engine.is_game_over:
+            color = engine.turn
+            agent = white if color == "white" else black
+
+            # get_move returns (san, log_prob)
+            san, log_prob = agent.get_move(engine, color, move_history)
+
+            # get reference log prob for GRPO KL term
+            ref_log_prob = agent.get_move_log_prob_only(engine, color, move_history, san)
+
+            # apply the move
+            uci = engine.apply_move_san(san)
+            if uci is None:
+                # fallback: random legal move
+                san = engine.random_legal_move_san()
+                uci = engine.apply_move_san(san) or ""
+                log_prob = -1.0
+                ref_log_prob = -1.0
+
+            move_history.append(san)
+            trainer.record_move(log_prob, ref_log_prob)
+
+            # Keep snapshot current so late joiners see the live position
+            game_snapshot.update({
+                "fen": engine.fen,
+                "move_number": engine.move_number,
+                "wallet_white": wallet_white,
+                "wallet_black": wallet_black,
+            })
+
+            await ws_manager.broadcast_raw({
+                "type": "move",
+                "data": {
+                    "player": color,
+                    "uci": uci or "",
+                    "move": san,
+                    "fen": engine.fen,
+                    "turn": engine.turn,
+                    "move_number": engine.move_number,
+                    "wallet_white": wallet_white,
+                    "wallet_black": wallet_black,
+                    "log_prob": log_prob,
+                    "message": f"{color} plays {san}",
+                },
+            })
+            await asyncio.sleep(settings.move_delay)
+
+        result = engine.result
+        reward_w = engine.compute_reward("white")
+        reward_b = engine.compute_reward("black")
+
+        # Award prize money: winner gets 2x entry fee, draw splits the pot
+        prize_pool = settings.entry_fee * 2
+        if reward_w > 0:      # white wins
+            prize_white = prize_pool
+            prize_black = 0.0
+        elif reward_b > 0:    # black wins
+            prize_white = 0.0
+            prize_black = prize_pool
+        else:                  # draw — split pot
+            prize_white = prize_pool / 2
+            prize_black = prize_pool / 2
+
+        wallet_white += prize_white
+        wallet_black += prize_black
+
+        metrics = trainer.end_game(
+            reward=reward_w,
+            profit=prize_white - settings.entry_fee,
+            coaching_calls=0,
+        )
+
+        net_pnl_white = prize_white - settings.entry_fee
+
+        # Update snapshot with post-game wallet values
+        game_snapshot.update({
+            "type": "between_games",
+            "wallet_white": wallet_white,
+            "wallet_black": wallet_black,
+            "games_completed": game_num,
+            "grpo_step": (metrics or trainer._metrics).step,
+        })
+
+        await ws_manager.broadcast_raw({
+            "type": "game_end",
+            "data": {
+                "game": game_num,
+                "game_id": game_num,
+                "result": result,
+                "reward": reward_w,
+                "reward_white": reward_w,
+                "reward_black": reward_b,
+                "wallet_white": wallet_white,
+                "wallet_black": wallet_black,
+                "net_pnl_white": net_pnl_white,
+                "prize_income": prize_white,
+                "coaching_cost": 0.0,
+                "entry_fee": settings.entry_fee,
+                "grpo_loss": metrics.loss if metrics else None,
+                "win_rate": metrics.win_rate if metrics else None,
+                "kl_divergence": metrics.kl_div if metrics else None,
+                "avg_profit": metrics.avg_profit if metrics else None,
+                "grpo_step": metrics.step if metrics else 0,
+            },
+        })
+
+        # Always emit a training_step event so the GRPO charts update
+        # even when end_game returns None (not every game triggers an update)
+        current_metrics = metrics or trainer._metrics
+        await ws_manager.broadcast_raw({
+            "type": "training_step",
+            "data": {
+                "step": current_metrics.step,
+                "loss": current_metrics.loss,
+                "reward": reward_w,
+                "kl_div": current_metrics.kl_div,
+                "win_rate": current_metrics.win_rate,
+                "avg_profit": current_metrics.avg_profit,
+                "coaching_rate": 0.0,
+                "games": current_metrics.games,
+            },
+        })
+
+        await asyncio.sleep(settings.move_delay * 4)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("ChessEcon backend starting up")
+    logger.info(f"Frontend dist: {FRONTEND_DIST} (exists: {FRONTEND_DIST.exists()})")
+    logger.info(f"Claude Coach: {'enabled' if os.getenv('ANTHROPIC_API_KEY') else 'disabled (no API key)'}")
+    logger.info(f"HuggingFace token: {'set' if os.getenv('HF_TOKEN') else 'not set'}")
+    asyncio.create_task(game_loop())
+    yield
+    logger.info("ChessEcon backend shutting down")
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="ChessEcon API",
+    description="Multi-Agent Chess Economy — Backend API",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── API routes ────────────────────────────────────────────────────────────────
+app.include_router(game_router)
+app.include_router(training_router)
+
+# ── WebSocket endpoint ──────────────────────────────────────────────────────
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws_manager.connect(ws)
+    # Send current game state to the newly connected client
+    if game_snapshot:
+        snap = game_snapshot.copy()
+        await ws.send_text(json.dumps({
+            "type": "status",
+            "timestamp": __import__('time').time(),
+            "data": snap,
+        }))
+    try:
+        while True:
+            data = await ws.receive_text()
+            try:
+                msg = json.loads(data)
+                action = msg.get("action")
+                if action == "ping":
+                    await ws.send_text(json.dumps({"type": "pong"}))
+                elif action == "start_game":
+                    pass  # game_loop auto-starts from lifespan
+                elif action == "stop_game":
+                    pass  # games stop after current game ends
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(ws)
+
+# ── Health check ──────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "chessecon-backend",
+        "version": "2.0.0",
+        "ws_connections": ws_manager.connection_count,
+        "claude_available": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "hf_token_set": bool(os.getenv("HF_TOKEN")),
+    }
+
+@app.get("/api/config")
+async def get_config():
+    return {
+        "entry_fee": float(os.getenv("ENTRY_FEE", "10.0")),
+        "initial_wallet": float(os.getenv("INITIAL_WALLET", "100.0")),
+        "coaching_fee": float(os.getenv("COACHING_FEE", "5.0")),
+        "player_model": os.getenv("PLAYER_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
+        "claude_model": os.getenv("CLAUDE_MODEL", "claude-opus-4-5"),
+        "claude_available": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "rl_method": os.getenv("RL_METHOD", "grpo"),
+    }
+
+# ── Serve React frontend (SPA) ────────────────────────────────────────────────
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        index = FRONTEND_DIST / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return JSONResponse({"error": "Frontend not built"}, status_code=503)
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "message": "ChessEcon API running. Frontend not built yet.",
+            "docs": "/docs",
+            "health": "/health",
+        }
+# Patch already applied — see websocket_endpoint above
+

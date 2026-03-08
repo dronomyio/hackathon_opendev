@@ -1,0 +1,13 @@
+# ChessEcon Training Dependencies
+python-chess>=1.10.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
+requests>=2.32.0
+huggingface-hub>=0.24.0
+
+# RL Training (install separately for GPU support)
+# torch>=2.3.0  -- install via: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# transformers>=4.44.0
+# trl>=0.10.0
+# accelerate>=0.33.0
+# bitsandbytes>=0.43.0  # for 8-bit quantization on GPU

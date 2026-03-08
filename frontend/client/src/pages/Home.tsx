@@ -1,0 +1,708 @@
+/**
+ * ChessEcon Live Dashboard — Main Page
+ * Design: Quantitative Finance Dark (Bloomberg-inspired trading terminal)
+ *
+ * Data source: toggles between browser simulation and real Python backend WebSocket.
+ * When backend is available, all events are real agent moves, Claude coaching calls,
+ * and GRPO training steps from the Python process.
+ */
+import { useEffect, useState, useRef, useCallback } from "react";
+import { sim, fenToBoard, type GameState, type GameEvent, type TrainingMetrics, type EconomicDataPoint, type EventType } from "@/lib/simulation";
+import { useBackendWS, type WSMessage } from "@/lib/useBackendWS";
+import ChessBoard from "@/components/ChessBoard";
+import EventFeed from "@/components/EventFeed";
+import TrainingCharts from "@/components/TrainingCharts";
+import WalletChart from "@/components/WalletChart";
+import EconomicPerformance from "@/components/EconomicPerformance";
+import { Panel, PanelHeader, PanelDot } from "@/components/Panel";
+
+const HERO_BG = "https://d2xsxph8kpxj0f.cloudfront.net/92838043/eBShsyyL7vn2AEWucukL8e/chessecon-hero-bg-oC98shsc44Ruy4yPBMWoLr.webp";
+
+// ── KPI Card ──────────────────────────────────────────────────────────────
+interface KpiCardProps {
+  label: string;
+  value: string;
+  sub?: string;
+  variant: "white" | "black" | "claude" | "green";
+}
+
+const KPI_COLORS = {
+  white:  { accent: "#2D9CDB", bg: "rgba(45,156,219,0.08)",  border: "rgba(45,156,219,0.25)" },
+  black:  { accent: "#E05C5C", bg: "rgba(224,92,92,0.08)",   border: "rgba(224,92,92,0.25)" },
+  claude: { accent: "#F5A623", bg: "rgba(245,166,35,0.08)",  border: "rgba(245,166,35,0.25)" },
+  green:  { accent: "#27AE60", bg: "rgba(39,174,96,0.08)",   border: "rgba(39,174,96,0.25)" },
+};
+
+function KpiCard({ label, value, sub, variant }: KpiCardProps) {
+  const c = KPI_COLORS[variant];
+  return (
+    <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: "0.25rem", padding: "0.5rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.125rem", position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "2px", background: c.accent }} />
+      <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", textTransform: "uppercase" as const, letterSpacing: "0.1em", color: "rgba(255,255,255,0.35)" }}>
+        {label}
+      </span>
+      <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "1.125rem", fontWeight: 600, lineHeight: 1.2, color: c.accent, fontVariantNumeric: "tabular-nums" }}>
+        {value}
+      </span>
+      {sub && <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.3)" }}>{sub}</span>}
+    </div>
+  );
+}
+
+// ── Move History ──────────────────────────────────────────────────────────
+function MoveHistory({ moves }: { moves: string[] }) {
+  const pairs: [string, string | undefined][] = [];
+  for (let i = 0; i < moves.length; i += 2) {
+    pairs.push([moves[i], moves[i + 1]]);
+  }
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [moves.length]);
+  return (
+    <div ref={ref} style={{ overflowY: "auto", height: "100%" }}>
+      <table style={{ width: "100%", fontSize: "0.625rem", fontFamily: "IBM Plex Mono, monospace", borderCollapse: "collapse" }}>
+        <tbody>
+          {pairs.map(([w, b], i) => (
+            <tr key={i} style={{ transition: "background 0.15s" }}>
+              <td style={{ padding: "0.125rem 0.25rem", color: "rgba(255,255,255,0.3)", width: "1.5rem", textAlign: "right" }}>{i + 1}.</td>
+              <td style={{ padding: "0.125rem 0.5rem", color: "#2D9CDB" }}>{w}</td>
+              <td style={{ padding: "0.125rem 0.5rem", color: "#E05C5C" }}>{b ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {moves.length === 0 && (
+        <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: "0.625rem", padding: "1rem", fontFamily: "IBM Plex Mono, monospace" }}>
+          No moves yet
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Agent Status Card ─────────────────────────────────────────────────────
+interface AgentStatusProps {
+  color: "white" | "black";
+  wallet: number;
+  coachingCalls: number;
+  isActive: boolean;
+}
+
+function AgentStatus({ color, wallet, coachingCalls, isActive }: AgentStatusProps) {
+  const isWhite = color === "white";
+  const accent = isWhite ? "#2D9CDB" : "#E05C5C";
+  const label = isWhite ? "White Agent" : "Black Agent";
+  const model = "Qwen2.5-0.5B";
+  const piece = isWhite ? "♔" : "♚";
+  return (
+    <div style={{
+      borderRadius: "0.25rem",
+      padding: "0.625rem",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.5rem",
+      background: `${accent}0d`,
+      border: `1px solid ${accent}40`,
+      boxShadow: isActive ? `0 0 12px ${accent}30` : "none",
+      transition: "box-shadow 0.3s",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <span style={{ fontSize: "1.25rem", lineHeight: 1 }}>{piece}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
+            <span style={{ fontSize: "0.75rem", fontWeight: 600, color: accent }}>{label}</span>
+            {isActive && (
+              <span style={{ fontSize: "0.5rem", fontFamily: "IBM Plex Mono, monospace", padding: "0.125rem 0.25rem", borderRadius: "0.125rem", background: `${accent}20`, color: accent, animation: "pulse-live 1.5s ease-in-out infinite" }}>
+                THINKING
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "0.5625rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.35)" }}>{model}</div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.375rem" }}>
+        <div style={{ borderRadius: "0.125rem", padding: "0.375rem", background: "rgba(255,255,255,0.04)" }}>
+          <div style={{ fontSize: "0.5rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.3)", textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Wallet</div>
+          <div style={{ fontSize: "0.875rem", fontFamily: "IBM Plex Mono, monospace", fontWeight: 600, color: accent, fontVariantNumeric: "tabular-nums" }}>{wallet.toFixed(1)}</div>
+        </div>
+        <div style={{ borderRadius: "0.125rem", padding: "0.375rem", background: "rgba(255,255,255,0.04)" }}>
+          <div style={{ fontSize: "0.5rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.3)", textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Claude calls</div>
+          <div style={{ fontSize: "0.875rem", fontFamily: "IBM Plex Mono, monospace", fontWeight: 600, color: "#F5A623", fontVariantNumeric: "tabular-nums" }}>{coachingCalls}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Data Source Badge ─────────────────────────────────────────────────────
+function DataSourceBadge({ isBackend, isConnected }: { isBackend: boolean; isConnected: boolean }) {
+  const color = isBackend ? (isConnected ? "#27AE60" : "#F5A623") : "#2D9CDB";
+  const label = isBackend
+    ? (isConnected ? "LIVE BACKEND" : "CONNECTING...")
+    : "SIMULATION";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "0.375rem",
+      padding: "0.25rem 0.5rem", borderRadius: "0.125rem",
+      background: `${color}15`, border: `1px solid ${color}40`,
+    }}>
+      <div style={{ width: "0.375rem", height: "0.375rem", borderRadius: "50%", background: color,
+        animation: isConnected ? "pulse-live 1.5s ease-in-out infinite" : "none" }} />
+      <span style={{ fontSize: "0.5625rem", fontFamily: "IBM Plex Mono, monospace", color, letterSpacing: "0.08em" }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────
+export default function Home() {
+  const [gameState, setGameState] = useState<GameState>(sim.state);
+  const [events, setEvents] = useState<GameEvent[]>([]);
+  const [metrics, setMetrics] = useState<TrainingMetrics>(sim.metrics);
+  const [walletHistory, setWalletHistory] = useState<{ game: number; white: number; black: number }[]>([]);
+  const [economicData, setEconomicData] = useState<EconomicDataPoint[]>([]);
+  const cumulativePnlRef = useRef(0);
+  const [isRunning, setIsRunning] = useState(false);
+  const [gameCount, setGameCount] = useState(0);
+  const [trainingStep, setTrainingStep] = useState(0);
+
+  // Backend WebSocket mode
+  const [useBackend, setUseBackend] = useState(true);
+  const [backendConnected, setBackendConnected] = useState(false);
+
+  // WebSocket URL: VITE_WS_URL env override, else same host /ws, else localhost:8000/ws
+  const wsUrl = typeof window !== "undefined"
+    ? (import.meta.env.VITE_WS_URL as string | undefined)
+      ?? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`
+    : "ws://localhost:8000/ws";
+
+  // ── Backend WebSocket handler ─────────────────────────────────────────
+  const handleWsMessage = useCallback((msg: WSMessage) => {
+    const d = msg.data;
+
+    if (msg.type === "move") {
+      const moveSan = (d.move as string) ?? "";
+      const moveFen = (d.fen as string) ?? "";
+      setGameState(prev => ({
+        ...prev,
+        fen: moveFen || prev.fen,
+        board: moveFen ? fenToBoard(moveFen) : prev.board,
+        moves: [...prev.moves, moveSan],
+        turn: (d.turn as "white" | "black") ?? prev.turn,
+        moveNumber: (d.move_number as number) ?? prev.moveNumber,
+        walletWhite: (d.wallet_white as number) ?? prev.walletWhite,
+        walletBlack: (d.wallet_black as number) ?? prev.walletBlack,
+      }));
+      const ev: GameEvent = {
+        id: String(Date.now()),
+        type: "move",
+        agent: (d.player as "white" | "black") ?? "white",
+        move: (d.uci as string) ?? moveSan,
+        san: moveSan,
+        fen: moveFen,
+        walletWhite: (d.wallet_white as number) ?? 0,
+        walletBlack: (d.wallet_black as number) ?? 0,
+        message: (d.message as string) ?? `${d.player} plays ${moveSan}`,
+        timestamp: Date.now(),
+      };
+      setEvents(prev => [ev, ...prev].slice(0, 200));
+    }
+
+    if (msg.type === "game_start") {
+      setGameState(prev => ({
+        ...prev,
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        moves: [],
+        moveNumber: 0,
+        isOver: false,
+        result: undefined,
+        gameId: (d.game_id as number) ?? prev.gameId,
+        walletWhite: (d.wallet_white as number) ?? prev.walletWhite,
+        walletBlack: (d.wallet_black as number) ?? prev.walletBlack,
+        coachingCallsWhite: 0,
+        coachingCallsBlack: 0,
+      }));
+      const ev: GameEvent = {
+        id: String(Date.now()),
+        type: "game_start",
+        agent: "white",
+        timestamp: Date.now(),
+      };
+      setEvents(prev => [ev, ...prev].slice(0, 200));
+      setGameCount(c => c + 1);
+    }
+
+    if (msg.type === "game_end") {
+      const result = (d.result as "1-0" | "0-1" | "1/2-1/2") ?? "1/2-1/2";
+      setGameState(prev => ({
+        ...prev,
+        isOver: true,
+        result: result as "1-0" | "0-1" | "1/2-1/2",
+        walletWhite: (d.wallet_white as number) ?? prev.walletWhite,
+        walletBlack: (d.wallet_black as number) ?? prev.walletBlack,
+      }));
+      // Economic data point — backend sends net_pnl_white directly
+      const prizeIncome = (d.prize_income as number) ?? 0;
+      const coachingSpend = (d.coaching_cost as number) ?? 0;
+      const entryFee = (d.entry_fee as number) ?? 10;
+      const netPnl = (d.net_pnl_white as number) ?? (prizeIncome - entryFee - coachingSpend);
+      cumulativePnlRef.current += netPnl;
+      const point: EconomicDataPoint = {
+        game: gameCount,
+        prizeIncome,
+        coachingSpend: -coachingSpend,
+        entryFee: -entryFee,
+        netPnl,
+        cumulativePnl: cumulativePnlRef.current,
+        whiteWallet: (d.wallet_white as number) ?? 0,
+        blackWallet: (d.wallet_black as number) ?? 0,
+      };
+      setEconomicData(prev => [...prev, point].slice(-80));
+      setWalletHistory(prev => [
+        ...prev,
+        { game: gameCount, white: (d.wallet_white as number) ?? 0, black: (d.wallet_black as number) ?? 0 },
+      ].slice(-60));
+      const ev: GameEvent = {
+        id: String(Date.now()),
+        type: "game_end",
+        agent: "white",
+        result,
+        reward: (d.reward as number) ?? 0,
+        walletWhite: (d.wallet_white as number) ?? 0,
+        walletBlack: (d.wallet_black as number) ?? 0,
+        timestamp: Date.now(),
+      };
+      setEvents(prev => [ev, ...prev].slice(0, 200));
+    }
+
+    if (msg.type === "coaching_request" || msg.type === "coaching_result") {
+      const ev: GameEvent = {
+        id: String(Date.now()),
+        type: msg.type as EventType,
+        agent: (d.player as "white" | "black") ?? "white",
+        coachingFee: (d.fee as number) ?? 5,
+        timestamp: Date.now(),
+      };
+      setEvents(prev => [ev, ...prev].slice(0, 200));
+      if (msg.type === "coaching_request") {
+        const isWhite = d.player === "white";
+        setGameState(prev => ({
+          ...prev,
+          coachingCallsWhite: isWhite ? prev.coachingCallsWhite + 1 : prev.coachingCallsWhite,
+          coachingCallsBlack: !isWhite ? prev.coachingCallsBlack + 1 : prev.coachingCallsBlack,
+        }));
+      }
+    }
+
+    if (msg.type === "training_step") {
+      const step = (d.step as number) ?? 0;
+      setTrainingStep(step);
+      setMetrics(prev => ({
+        step,
+        loss: [...prev.loss, (d.loss as number) ?? 0].slice(-100),
+        reward: [...prev.reward, (d.reward as number) ?? 0].slice(-100),
+        kl: [...prev.kl, (d.kl_div as number) ?? 0].slice(-100),
+        winRate: [...prev.winRate, (d.win_rate as number) ?? 0].slice(-100),
+        avgProfit: [...(prev.avgProfit ?? []), (d.avg_profit as number) ?? 0].slice(-100),
+        coachingRate: [...prev.coachingRate, (d.coaching_rate as number) ?? 0].slice(-100),
+        steps: [...(prev.steps ?? []), step].slice(-100),
+      }));
+      const ev: GameEvent = {
+        id: String(Date.now()),
+        type: "training_step",
+        agent: "white",
+        trainingStep: step,
+        timestamp: Date.now(),
+      };
+      setEvents(prev => [ev, ...prev].slice(0, 200));
+    }
+
+    // ── Status snapshot: sent by backend when a new client connects mid-game
+    if (msg.type === "status") {
+      const snap = d;
+      // Sync wallet balances, game counter, board position from snapshot
+      setGameState(prev => ({
+        ...prev,
+        walletWhite: (snap.wallet_white as number) ?? prev.walletWhite,
+        walletBlack: (snap.wallet_black as number) ?? prev.walletBlack,
+        gameId: (snap.game_num as number) ?? prev.gameId,
+        fen: (snap.fen as string) || prev.fen,
+        board: (snap.fen as string) ? fenToBoard(snap.fen as string) : prev.board,
+        moveNumber: (snap.move_number as number) ?? prev.moveNumber,
+      }));
+      if (snap.games_completed !== undefined) {
+        setGameCount((snap.games_completed as number) ?? 0);
+      }
+      if (snap.grpo_step !== undefined) {
+        setTrainingStep((snap.grpo_step as number) ?? 0);
+      }
+    }
+  }, [gameCount]);
+
+  // ── Backend WS connection ─────────────────────────────────────────────
+  const { send: sendWs } = useBackendWS({
+    url: wsUrl,
+    onMessage: handleWsMessage,
+    onOpen: () => { setBackendConnected(true); setEvents([]); },
+    onClose: () => setBackendConnected(false),
+    enabled: useBackend,
+  });
+
+  // ── Keepalive ping every 5s so watchdog doesn't fire on slow games ────
+  useEffect(() => {
+    if (!useBackend) return;
+    const id = setInterval(() => sendWs("ping"), 5000);
+    return () => clearInterval(id);
+  }, [useBackend, sendWs]);
+
+  // ── Simulation mode ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (useBackend) return; // Skip simulation when using real backend
+
+    const unsubState = sim.onState((s) => {
+      setGameState({ ...s });
+      setGameCount(sim.gameCount);
+      if (s.isOver) {
+        setWalletHistory((prev) => [
+          ...prev,
+          { game: sim.gameCount, white: s.walletWhite, black: s.walletBlack },
+        ].slice(-60));
+      }
+    });
+    const unsubEvents = sim.on((e) => {
+      setEvents([...sim.events]);
+      if (e.type === "training_step") setTrainingStep(e.trainingStep ?? 0);
+      if (e.type === "game_end" && e.walletWhite !== undefined && e.walletBlack !== undefined) {
+        const prizeIncome = e.reward === 1 ? 18 : e.reward === 0 ? 5 : 0;
+        const coachingSpend = -((e.walletWhite ?? 0) + (e.walletBlack ?? 0) > 0 ? Math.random() * 8 : 0);
+        const entryFee = -10;
+        const netPnl = prizeIncome + coachingSpend + entryFee;
+        cumulativePnlRef.current += netPnl;
+        const point: EconomicDataPoint = {
+          game: sim.gameCount,
+          prizeIncome,
+          coachingSpend: parseFloat(coachingSpend.toFixed(2)),
+          entryFee,
+          netPnl: parseFloat(netPnl.toFixed(2)),
+          cumulativePnl: parseFloat(cumulativePnlRef.current.toFixed(2)),
+          whiteWallet: e.walletWhite ?? 0,
+          blackWallet: e.walletBlack ?? 0,
+        };
+        setEconomicData((prev) => [...prev, point].slice(-80));
+      }
+    });
+    const unsubMetrics = sim.onMetrics((m) => setMetrics({ ...m }));
+    return () => { unsubState(); unsubEvents(); unsubMetrics(); };
+  }, [useBackend]);
+
+  const handleToggle = useCallback(() => {
+    if (useBackend) {
+      // In backend mode, send start/stop command to backend
+      sendWs(isRunning ? "stop_game" : "start_game");
+      setIsRunning(r => !r);
+    } else {
+      if (isRunning) { sim.stop(); setIsRunning(false); }
+      else { sim.start(); setIsRunning(true); }
+    }
+  }, [isRunning, useBackend, sendWs]);
+
+  const handleReset = useCallback(() => {
+    sim.stop();
+    setIsRunning(false);
+    setEvents([]);
+    setWalletHistory([]);
+    setTrainingStep(0);
+    setGameCount(0);
+    cumulativePnlRef.current = 0;
+    setEconomicData([]);
+  }, []);
+
+  const handleToggleSource = useCallback(() => {
+    if (isRunning) {
+      sim.stop();
+      setIsRunning(false);
+    }
+    setUseBackend(b => !b);
+    setEvents([]);
+    setWalletHistory([]);
+    setEconomicData([]);
+    setTrainingStep(0);
+    setGameCount(0);
+    cumulativePnlRef.current = 0;
+  }, [isRunning]);
+
+  const lastEvent = events[0];
+  const isCoachingActive = lastEvent?.type === "coaching_request" || lastEvent?.type === "coaching_response";
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "oklch(0.09 0.018 240)", fontFamily: "'Space Grotesk', sans-serif", overflow: "hidden" }}>
+
+      {/* ── Header ── */}
+      <header style={{ position: "relative", borderBottom: "1px solid rgba(255,255,255,0.08)", overflow: "hidden", background: "oklch(0.10 0.018 240)" }}>
+        <div style={{ position: "absolute", inset: 0, opacity: 0.2, backgroundImage: `url(${HERO_BG})`, backgroundSize: "cover", backgroundPosition: "center" }} />
+        <div style={{ position: "relative", zIndex: 10, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.625rem 1rem" }}>
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <span style={{ fontSize: "1.5rem" }}>♟</span>
+            <div>
+              <div style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
+                Chess<span style={{ color: "#F5A623" }}>Econ</span>
+              </div>
+              <div style={{ fontSize: "0.5625rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.35)", letterSpacing: "0.12em", textTransform: "uppercase" as const }}>
+                Multi-Agent RL Training Dashboard
+              </div>
+            </div>
+          </div>
+
+          {/* Center KPIs */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            {[
+              { label: "Games", value: String(gameCount), color: "rgba(255,255,255,0.85)" },
+              { label: "GRPO Step", value: String(trainingStep), color: "#a78bfa" },
+              { label: "Move", value: String(gameState.moveNumber), color: "rgba(255,255,255,0.85)" },
+            ].map((item, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                {i > 0 && <div style={{ width: "1px", height: "1.5rem", background: "rgba(255,255,255,0.1)" }} />}
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: "0.5rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.3)", textTransform: "uppercase" as const, letterSpacing: "0.1em" }}>{item.label}</div>
+                  <div style={{ fontSize: "0.875rem", fontFamily: "IBM Plex Mono, monospace", fontWeight: 700, color: item.color, fontVariantNumeric: "tabular-nums" }}>{item.value}</div>
+                </div>
+              </div>
+            ))}
+            {isCoachingActive && (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.25rem 0.5rem", borderRadius: "0.125rem", background: "rgba(245,166,35,0.15)", border: "1px solid rgba(245,166,35,0.4)", animation: "pulse-live 1.5s ease-in-out infinite" }}>
+                <span style={{ fontSize: "0.625rem", color: "#F5A623" }}>◈</span>
+                <span style={{ fontSize: "0.5625rem", fontFamily: "IBM Plex Mono, monospace", color: "#F5A623" }}>Claude Active</span>
+              </div>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {/* Data source toggle */}
+            <DataSourceBadge isBackend={useBackend} isConnected={backendConnected} />
+            <button
+              onClick={handleToggleSource}
+              title={useBackend ? "Switch to simulation mode" : "Switch to live backend mode"}
+              style={{
+                padding: "0.25rem 0.5rem",
+                borderRadius: "0.125rem",
+                fontSize: "0.5625rem",
+                fontFamily: "IBM Plex Mono, monospace",
+                cursor: "pointer",
+                border: "1px solid rgba(255,255,255,0.15)",
+                background: "rgba(255,255,255,0.06)",
+                color: "rgba(255,255,255,0.5)",
+              }}
+            >
+              {useBackend ? "⇄ SIM" : "⇄ LIVE"}
+            </button>
+
+            <div style={{ width: "1px", height: "1.5rem", background: "rgba(255,255,255,0.1)" }} />
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
+              <div className="live-dot" style={{ opacity: isRunning ? 1 : 0.3 }} />
+              <span style={{ fontSize: "0.5625rem", fontFamily: "IBM Plex Mono, monospace", color: "rgba(255,255,255,0.35)" }}>{isRunning ? "LIVE" : "PAUSED"}</span>
+            </div>
+            <button
+              onClick={handleToggle}
+              style={{
+                padding: "0.375rem 0.75rem",
+                borderRadius: "0.125rem",
+                fontSize: "0.6875rem",
+                fontFamily: "IBM Plex Mono, monospace",
+                fontWeight: 500,
+                cursor: "pointer",
+                border: `1px solid ${isRunning ? "rgba(224,92,92,0.4)" : "rgba(45,156,219,0.4)"}`,
+                background: isRunning ? "rgba(224,92,92,0.15)" : "rgba(45,156,219,0.15)",
+                color: isRunning ? "#E05C5C" : "#2D9CDB",
+                transition: "all 0.2s",
+              }}
+            >
+              {isRunning ? "⏸ Pause" : "▶ Start"}
+            </button>
+            <button
+              onClick={handleReset}
+              style={{
+                padding: "0.375rem 0.75rem",
+                borderRadius: "0.125rem",
+                fontSize: "0.6875rem",
+                fontFamily: "IBM Plex Mono, monospace",
+                cursor: "pointer",
+                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.05)",
+                color: "rgba(255,255,255,0.4)",
+              }}
+            >
+              ↺ Reset
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ── Main Content ── */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.5rem", overflow: "hidden", minHeight: 0 }}>
+
+        {/* KPI strip */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "0.5rem", flexShrink: 0 }}>
+          <KpiCard label="White Wallet" value={gameState.walletWhite.toFixed(1)} sub="units" variant="white" />
+          <KpiCard label="Black Wallet" value={gameState.walletBlack.toFixed(1)} sub="units" variant="black" />
+          <KpiCard label="W Coaching" value={String(gameState.coachingCallsWhite)} sub="calls" variant="claude" />
+          <KpiCard label="B Coaching" value={String(gameState.coachingCallsBlack)} sub="calls" variant="claude" />
+          <KpiCard
+            label="Last Reward"
+            value={metrics.reward.at(-1) !== undefined ? `${metrics.reward.at(-1)! >= 0 ? "+" : ""}${metrics.reward.at(-1)!.toFixed(3)}` : "—"}
+            variant={metrics.reward.at(-1) !== undefined && metrics.reward.at(-1)! >= 0 ? "green" : "black"}
+          />
+          <KpiCard label="Win Rate" value={metrics.winRate.at(-1) !== undefined ? `${(metrics.winRate.at(-1)! * 100).toFixed(1)}%` : "—"} variant="white" />
+          <KpiCard label="GRPO Loss" value={metrics.loss.at(-1) !== undefined ? metrics.loss.at(-1)!.toFixed(4) : "—"} variant="black" />
+          <KpiCard label="KL Div" value={metrics.kl.at(-1) !== undefined ? metrics.kl.at(-1)!.toFixed(4) : "—"} variant="claude" />
+        </div>
+
+        {/* Main 3-column layout */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.5rem", overflow: "hidden", minHeight: 0 }}>
+          <div style={{ flex: 1, display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1.5fr) minmax(0,2.5fr)", gap: "0.5rem", overflow: "hidden", minHeight: 0 }}>
+
+            {/* LEFT: Agent status + chess board */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minHeight: 0, overflow: "hidden" }}>
+              {/* Agent cards: flexShrink:0 so they never compress; auto height */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", flexShrink: 0 }}>
+                <AgentStatus color="white" wallet={gameState.walletWhite} coachingCalls={gameState.coachingCallsWhite} isActive={gameState.turn === "white" && !gameState.isOver} />
+                <AgentStatus color="black" wallet={gameState.walletBlack} coachingCalls={gameState.coachingCallsBlack} isActive={gameState.turn === "black" && !gameState.isOver} />
+              </div>
+              {/* Board panel: fills remaining column height, board grid distributes rows evenly */}
+              <Panel style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+                <PanelHeader>
+                  <PanelDot color="#2D9CDB" />
+                  <span>LIVE BOARD</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>
+                    Game #{gameState.gameId} · Move {gameState.moveNumber}
+                  </span>
+                  {gameState.isOver && gameState.result && (
+                    <span style={{
+                      fontFamily: "IBM Plex Mono, monospace",
+                      fontSize: "0.5625rem",
+                      padding: "0.125rem 0.375rem",
+                      borderRadius: "0.125rem",
+                      marginLeft: "0.25rem",
+                      background: gameState.result === "1-0" ? "rgba(45,156,219,0.2)" : gameState.result === "0-1" ? "rgba(224,92,92,0.2)" : "rgba(255,255,255,0.1)",
+                      color: gameState.result === "1-0" ? "#2D9CDB" : gameState.result === "0-1" ? "#E05C5C" : "rgba(255,255,255,0.5)",
+                    }}>
+                      {gameState.result}
+                    </span>
+                  )}
+                </PanelHeader>
+                {/* Board fills all available panel height */}
+                <div style={{ flex: 1, padding: "0.5rem", boxSizing: "border-box", minHeight: 0, overflow: "hidden" }}>
+                  <ChessBoard state={gameState} />
+                </div>
+              </Panel>
+            </div>
+
+            {/* CENTER: Move history + wallet chart */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minHeight: 0, overflow: "hidden" }}>
+              <Panel style={{ flexShrink: 0, height: "280px", display: "flex", flexDirection: "column" }}>
+                <PanelHeader>
+                  <PanelDot color="#F5A623" />
+                  <span>MOVE HISTORY</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>{gameState.moves.length} moves</span>
+                </PanelHeader>
+                <div style={{ flex: 1, overflow: "hidden", padding: "0.25rem" }}>
+                  <MoveHistory moves={gameState.moves} />
+                </div>
+              </Panel>
+              <Panel style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <PanelHeader>
+                  <PanelDot color="#27AE60" />
+                  <span>WALLET HISTORY</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>{walletHistory.length} games</span>
+                </PanelHeader>
+                <div style={{ flex: 1, padding: "0.5rem", minHeight: 0 }}>
+                  <WalletChart history={walletHistory} />
+                </div>
+              </Panel>
+            </div>
+
+            {/* RIGHT: Training charts + event feed */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minHeight: 0, overflow: "hidden" }}>
+              <Panel style={{ flex: "0 0 55%", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+                <PanelHeader>
+                  <PanelDot color="#a78bfa" />
+                  <span>GRPO TRAINING METRICS</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>step {trainingStep}</span>
+                </PanelHeader>
+                <div style={{ flex: 1, padding: "0.5rem", minHeight: 0 }}>
+                  <TrainingCharts metrics={metrics} />
+                </div>
+              </Panel>
+              <Panel style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <PanelHeader>
+                  <span style={{ width: "0.375rem", height: "0.375rem", borderRadius: "50%", background: "#27AE60", flexShrink: 0, display: "inline-block" }} />
+                  <span>LIVE EVENT FEED</span>
+                  <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>{events.length} events</span>
+                  {isRunning && <div className="live-dot" style={{ marginLeft: "0.25rem" }} />}
+                </PanelHeader>
+                <div style={{ flex: 1, overflow: "hidden" }}>
+                  <EventFeed events={events} />
+                </div>
+              </Panel>
+            </div>
+          </div>
+
+          {/* BOTTOM ROW: Economic Performance Over Time */}
+          <Panel style={{ flexShrink: 0, height: "180px", display: "flex", flexDirection: "column" }}>
+            <PanelHeader>
+              <PanelDot color="#27AE60" />
+              <span>ECONOMIC PERFORMANCE OVER TIME</span>
+              <span style={{ marginLeft: "0.5rem", fontSize: "0.5625rem", color: "rgba(255,255,255,0.3)" }}>
+                prize income · coaching cost · entry fee · net P&L · cumulative P&L
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "rgba(255,255,255,0.5)" }}>
+                {economicData.length} games
+              </span>
+              {economicData.length > 0 && (
+                <span style={{
+                  marginLeft: "0.5rem",
+                  fontFamily: "IBM Plex Mono, monospace",
+                  fontSize: "0.6875rem",
+                  fontWeight: 600,
+                  color: (economicData.at(-1)?.cumulativePnl ?? 0) >= 0 ? "#27AE60" : "#E05C5C",
+                }}>
+                  Cumulative: {(economicData.at(-1)?.cumulativePnl ?? 0) >= 0 ? "+" : ""}{economicData.at(-1)?.cumulativePnl.toFixed(2) ?? "0.00"}
+                </span>
+              )}
+            </PanelHeader>
+            <div style={{ flex: 1, padding: "0.375rem 0.5rem 0.25rem", minHeight: 0 }}>
+              <EconomicPerformance data={economicData} />
+            </div>
+          </Panel>
+        </div>
+      </main>
+
+      {/* ── Footer ── */}
+      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "0.375rem 1rem", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.25)" }}>
+          ChessEcon · TextArena + Meta OpenEnv + GRPO · Hackathon 2026
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.25)" }}>
+            Trainable: <span style={{ color: "#2D9CDB" }}>Qwen2.5-0.5B</span>
+          </span>
+          <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.25)" }}>
+            Coach: <span style={{ color: "#F5A623" }}>Claude claude-opus-4-5</span>
+          </span>
+          <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.25)" }}>
+            Reward: <span style={{ color: "#27AE60" }}>0.4×game + 0.6×profit</span>
+          </span>
+          <span style={{ fontFamily: "IBM Plex Mono, monospace", fontSize: "0.5625rem", color: "rgba(255,255,255,0.25)" }}>
+            Source: <span style={{ color: useBackend ? "#27AE60" : "#2D9CDB" }}>{useBackend ? "LIVE BACKEND" : "SIMULATION"}</span>
+          </span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+

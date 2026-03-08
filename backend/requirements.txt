@@ -1,0 +1,40 @@
+# ChessEcon Backend Dependencies
+# fastapi
+# uvicorn[standard]
+# websockets
+python-chess
+pydantic
+pydantic-settings
+anthropic
+# python-dotenv
+httpx
+
+# Nevermined Payments — x402 cross-team agent-to-agent payments
+# https://nevermined.ai/docs/getting-started/welcome
+
+
+huggingface_hub
+# transformers
+
+
+# ChessEcon Backend — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Web server ────────────────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+websockets
+
+# ── Chess ─────────────────────────────────────────────────────────────────────
+chess
+
+# ── LLM / Training ───────────────────────────────────────────────────────────
+torch
+transformers
+accelerate
+peft
+sentencepiece
+protobuf
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv

@@ -1,0 +1,61 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ChessEcon — Full stack
+#
+# Services:
+#   backend   — Python FastAPI WebSocket server (Qwen + GRPO)
+#   dashboard — React/Node.js dashboard (Manus web project)
+#
+# Quick start (GPU machine):
+#   cp backend/.env.example backend/.env   # fill in HF_TOKEN etc.
+#   docker compose up --build
+#
+# The dashboard is served on port 3000.
+# The backend WebSocket is on port 8000 (/ws).
+# In LIVE mode the dashboard connects to ws://localhost:8000/ws
+# (or set VITE_WS_URL to override).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Python backend (Qwen + GRPO + WebSocket) ─────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: chessecon-backend:latest
+    container_name: chessecon-backend
+    restart: unless-stopped
+    ports:
+      - "8008:8000"
+    env_file:
+      - ./backend/.env          # create from env-vars-reference.md
+    environment:
+      - DEVICE=auto             # override with "cpu" if no GPU
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - hf_cache:/app/.cache/huggingface   # persist model weights
+      - checkpoints:/app/checkpoints       # persist LoRA adapters
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s      # allow time for model download
+
+  # ── React dashboard (Node.js dev server) ─────────────────────────────────
+  dashboard:
+    image: nginx:alpine
+    container_name: chessecon-dashboard
+    restart: unless-stopped
+    ports:
+     - "3006:80"
+    volumes:
+     - ./frontend/dist/public:/usr/share/nginx/html:ro
+
+volumes:
+  hf_cache:
+  checkpoints:
+

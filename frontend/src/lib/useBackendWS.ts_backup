@@ -1,0 +1,108 @@
+/**
+ * ChessEcon — Real Backend WebSocket Hook
+ * Connects to the Python FastAPI /ws endpoint and dispatches
+ * all game, coaching, economy, and training events to the dashboard.
+ */
+import { useEffect, useRef, useCallback } from "react";
+
+export type WSEventType =
+  | "game_start"
+  | "move"
+  | "coaching_request"
+  | "coaching_result"
+  | "game_end"
+  | "training_step"
+  | "economy_update"
+  | "pong";
+
+export interface WSMessage {
+  type: WSEventType;
+  data: Record<string, unknown>;
+}
+
+interface UseBackendWSOptions {
+  url: string;
+  onMessage: (msg: WSMessage) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+  enabled?: boolean;
+}
+
+export function useBackendWS({
+  url,
+  onMessage,
+  onOpen,
+  onClose,
+  enabled = true,
+}: UseBackendWSOptions) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  const connect = useCallback(() => {
+    if (!enabled || !mountedRef.current) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    try {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (onOpen) onOpen();
+        // Start ping interval
+        const ping = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: "ping" }));
+          } else {
+            clearInterval(ping);
+          }
+        }, 30_000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data) as WSMessage;
+          onMessage(msg);
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      ws.onclose = () => {
+        if (onClose) onClose();
+        // Auto-reconnect after 3 seconds
+        if (mountedRef.current && enabled) {
+          reconnectTimer.current = setTimeout(connect, 3_000);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    } catch {
+      // WebSocket not available (e.g., SSR)
+    }
+  }, [url, onMessage, onOpen, onClose, enabled]);
+
+  const send = useCallback((action: string, payload: Record<string, unknown> = {}) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action, ...payload }));
+    }
+  }, []);
+
+  const disconnect = useCallback(() => {
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    wsRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (enabled) connect();
+    return () => {
+      mountedRef.current = false;
+      disconnect();
+    };
+  }, [connect, disconnect, enabled]);
+
+  return { send, disconnect, connect };
+}

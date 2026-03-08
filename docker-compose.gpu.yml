@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ChessEcon — GPU Override (docker-compose.gpu.yml)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# Requirements:
+#   - NVIDIA GPU with CUDA 12.1+ support
+#   - nvidia-container-toolkit installed on the host
+#   - Run: sudo nvidia-ctk runtime configure --runtime=docker
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  chessecon:
+    build:
+      target: backend-gpu
+    image: chessecon:gpu
+    environment:
+      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
+      TORCH_DTYPE: "${TORCH_DTYPE:-bfloat16}"
+      USE_FLASH_ATTENTION: "${USE_FLASH_ATTENTION:-true}"
+      DEVICE: "cuda"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  trainer:
+    build:
+      target: backend-gpu
+    image: chessecon:gpu
+    environment:
+      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-all}"
+      TORCH_DTYPE: "${TORCH_DTYPE:-bfloat16}"
+      USE_FLASH_ATTENTION: "${USE_FLASH_ATTENTION:-true}"
+      DEVICE: "cuda"
+      # Multi-GPU training
+      NPROC_PER_NODE: "${NPROC_PER_NODE:-1}"
+      # Larger batches on GPU
+      GAMES_PER_BATCH: "${GAMES_PER_BATCH:-16}"
+      BATCH_SIZE: "${BATCH_SIZE:-8}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── ChessEcon Dashboard: Quantitative Finance Dark Theme ──────────────────
+   Design: Bloomberg-inspired trading terminal
+   Space Grotesk headings + IBM Plex Mono data
+   Electric blue (White), coral red (Black), gold (Claude)
+   ─────────────────────────────────────────────────────────────────────── */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.3rem;
+  --background: oklch(0.09 0.018 240);
+  --foreground: oklch(0.92 0.005 240);
+  --card: oklch(0.12 0.016 240);
+  --card-foreground: oklch(0.92 0.005 240);
+  --popover: oklch(0.14 0.016 240);
+  --popover-foreground: oklch(0.92 0.005 240);
+  --primary: oklch(0.65 0.18 240);
+  --primary-foreground: oklch(0.09 0.018 240);
+  --secondary: oklch(0.16 0.014 240);
+  --secondary-foreground: oklch(0.75 0.008 240);
+  --muted: oklch(0.14 0.012 240);
+  --muted-foreground: oklch(0.52 0.010 240);
+  --accent: oklch(0.18 0.016 240);
+  --accent-foreground: oklch(0.92 0.005 240);
+  --destructive: oklch(0.60 0.20 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 0.08);
+  --input: oklch(1 0 0 / 0.10);
+  --ring: oklch(0.65 0.18 240);
+  --chart-1: oklch(0.65 0.18 240);
+  --chart-2: oklch(0.60 0.20 25);
+  --chart-3: oklch(0.72 0.18 65);
+  --chart-4: oklch(0.65 0.18 145);
+  --chart-5: oklch(0.60 0.15 290);
+  --sidebar: oklch(0.10 0.018 240);
+  --sidebar-foreground: oklch(0.85 0.005 240);
+  --sidebar-primary: oklch(0.65 0.18 240);
+  --sidebar-primary-foreground: oklch(0.09 0.018 240);
+  --sidebar-accent: oklch(0.16 0.014 240);
+  --sidebar-accent-foreground: oklch(0.92 0.005 240);
+  --sidebar-border: oklch(1 0 0 / 0.08);
+  --sidebar-ring: oklch(0.65 0.18 240);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklch, var(--color-ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href] {
+    cursor: pointer;
+  }
+}
+
+/* ── Custom component styles (plain CSS, no Tailwind utilities) ── */
+
+/* .panel and .panel-header are handled by the Panel React component */
+
+/* Agent color tokens */
+.text-agent-white  { color: #2D9CDB; }
+.text-agent-black  { color: #E05C5C; }
+.text-agent-claude { color: #F5A623; }
+.text-agent-profit { color: #27AE60; }
+.text-agent-loss   { color: #E05C5C; }
+
+.bg-agent-white  { background-color: rgba(45, 156, 219, 0.15); }
+.bg-agent-black  { background-color: rgba(224, 92, 92, 0.15); }
+.bg-agent-claude { background-color: rgba(245, 166, 35, 0.15); }
+
+.border-agent-white  { border-color: rgba(45, 156, 219, 0.4); }
+.border-agent-black  { border-color: rgba(224, 92, 92, 0.4); }
+.border-agent-claude { border-color: rgba(245, 166, 35, 0.4); }
+
+/* Live indicator */
+.live-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #27AE60;
+  animation: pulse-live 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(39, 174, 96, 0.7); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 4px rgba(39, 174, 96, 0); }
+}
+
+/* Chess board */
+.chess-board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+/* Classic chess board colors: cream light squares, warm brown dark squares */
+.chess-square-light { background-color: #F0D9B5; }
+.chess-square-dark  { background-color: #B58863; }
+
+/* Event feed */
+.event-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.125rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.6875rem;
+  border-left: 2px solid transparent;
+  transition: background 0.2s;
+  animation: slide-in 0.3s ease-out;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.event-item:hover { background: rgba(255, 255, 255, 0.04); }
+
+.event-move-white   { border-left-color: #2D9CDB; }
+.event-move-black   { border-left-color: #E05C5C; }
+.event-coaching     { border-left-color: #F5A623; background: rgba(245, 166, 35, 0.05); }
+.event-game-start   { border-left-color: #27AE60; }
+.event-game-end     { border-left-color: #9b59b6; }
+.event-training     { border-left-color: #a78bfa; background: rgba(167, 139, 250, 0.05); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* Container */
+.container {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .container { padding-left: 1.5rem; padding-right: 1.5rem; }
+}
+
+@media (min-width: 1024px) {
+  .container { padding-left: 2rem; padding-right: 2rem; max-width: 1600px; }
+}
+
