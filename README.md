@@ -387,22 +387,99 @@ asyncio.run(watch())
 
 ---
 
+## Models
+
+ChessEcon uses two publicly available HuggingFace models:
+
+| Agent | Model Card | Size | Local Path |
+|---|---|---|---|
+| ♔ White (trainable) | [Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) | 943 MB | `training/models/Qwen_Qwen2.5-0.5B-Instruct/` |
+| ♚ Black (fixed) | [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct) | 2.4 GB | `training/models/meta-llama_Llama-3.2-1B-Instruct/` |
+
+> **Note:** `Llama-3.2-1B-Instruct` requires a HuggingFace account with Meta's license accepted at [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct). Generate a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+### Download Commands
+
+**Option A — Python (recommended):**
+
+```python
+from huggingface_hub import snapshot_download
+
+# White agent — Qwen2.5-0.5B-Instruct (no token required)
+snapshot_download(
+    repo_id="Qwen/Qwen2.5-0.5B-Instruct",
+    local_dir="training/models/Qwen_Qwen2.5-0.5B-Instruct",
+    local_dir_use_symlinks=False,
+)
+
+# Black agent — Llama-3.2-1B-Instruct (requires HF token + Meta license)
+snapshot_download(
+    repo_id="meta-llama/Llama-3.2-1B-Instruct",
+    local_dir="training/models/meta-llama_Llama-3.2-1B-Instruct",
+    local_dir_use_symlinks=False,
+    token="hf_YOUR_TOKEN_HERE",
+)
+```
+
+**Option B — huggingface-cli:**
+
+```bash
+# Install CLI if needed
+pip install huggingface_hub
+
+# White agent (no token)
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct \
+  --local-dir training/models/Qwen_Qwen2.5-0.5B-Instruct
+
+# Black agent (token required)
+huggingface-cli login   # paste your HF token when prompted
+huggingface-cli download meta-llama/Llama-3.2-1B-Instruct \
+  --local-dir training/models/meta-llama_Llama-3.2-1B-Instruct
+```
+
+**Option C — git lfs:**
+
+```bash
+git lfs install
+
+# White agent
+git clone https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct \
+  training/models/Qwen_Qwen2.5-0.5B-Instruct
+
+# Black agent (must be logged in: huggingface-cli login)
+git clone https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct \
+  training/models/meta-llama_Llama-3.2-1B-Instruct
+```
+
+### Verify Downloads
+
+```bash
+# Expected files after download:
+ls training/models/Qwen_Qwen2.5-0.5B-Instruct/
+# config.json  generation_config.json  model.safetensors  tokenizer*.json  ...
+
+ls training/models/meta-llama_Llama-3.2-1B-Instruct/
+# config.json  generation_config.json  model.safetensors  tokenizer*.json  ...
+
+# Check sizes
+du -sh training/models/Qwen_Qwen2.5-0.5B-Instruct/model.safetensors
+# → 943M
+
+du -sh training/models/meta-llama_Llama-3.2-1B-Instruct/model.safetensors
+# → 2.4G
+```
+
+---
+
 ## Running Locally
 
 ```bash
 git clone https://huggingface.co/spaces/adaboost-ai/chessecon
 cd chessecon
 
-# Download models (first run only — requires HF token for Llama)
-python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Qwen/Qwen2.5-0.5B-Instruct',
-    local_dir='training/models/Qwen_Qwen2.5-0.5B-Instruct')
-snapshot_download('meta-llama/Llama-3.2-1B-Instruct',
-    local_dir='training/models/meta-llama_Llama-3.2-1B-Instruct')
-"
+# 1. Download models (see Models section above)
 
-# Start backend + dashboard
+# 2. Start backend + dashboard
 docker-compose up -d
 
 # API:       http://localhost:8008
