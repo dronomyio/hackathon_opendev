@@ -20,6 +20,8 @@ tags:
 license: apache-2.0
 ---
 
+**Dashboard:** https://chessecon.adaboost.ai
+
 <div align="center">
 
 # ♟️ ChessEcon
